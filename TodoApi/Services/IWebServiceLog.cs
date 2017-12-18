@@ -5,7 +5,7 @@ namespace TodoApi.Services
 {
     public interface IWebServiceLog
     {
-        void WebTraffic(HttpContext context);
-        void Api(Exception e);
+        void Traffic(HttpContext context);
+        void Exception(Exception e);
     }
 }

@@ -1,14 +1,18 @@
 ﻿using System;
-using System.IO;
+using System.Data;
+using System.Data.SqlClient;
+using System.Diagnostics;
 using System.Threading;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
+using TodoApi.Models;
 
 namespace TodoApi.Services
 {
     public class WebServiceLog : IWebServiceLog
     {
         private IConfiguration Configuration { get; }
+        public string ConnectionString { get; set; }
         public string LoggerId { get; set; }
         public string Enviroment { get; set; }
 
@@ -18,61 +22,86 @@ namespace TodoApi.Services
             LoggerId = Configuration.GetValue<string>("WebServiceLog:LoggerId");
             Enviroment = Configuration.GetValue<string>("WebServiceLog:Enviroment");
         }
-        
-        private void Log(string thread, int level, string logger, string method, string location, string message, string exception)
+
+        void IWebServiceLog.Traffic(HttpContext context)
         {
-            throw new NotImplementedException();
+            var method = context.Request.Method;
+            var url = context.Request.Host + "/" + context.Request.Path.Value + context.Request.Query;
+            var contentType = context.Request.ContentType;
+            var statusCode = context.Response.StatusCode;
+            var level = GetLevel(statusCode);
+            var ipAddress = context.Connection.RemoteIpAddress;
+
+            Logger(method, level.ToString(), "", "", url, contentType, statusCode.ToString(), ipAddress.ToString());
         }
 
-        private void Log(int level, string message, string exception, string method)
+        void IWebServiceLog.Exception(Exception e)
         {
-            throw new NotImplementedException();
+            var method = GetMethod();
+            const Enums.Level level = Enums.Level.Error;
+            var message = e.Message;
+            var exception = e.ToString();
+
+            Logger(method, level.ToString(), message, exception, "", "", "", "");
         }
 
-        public void WebTraffic(HttpContext context)
-        {
-            var ip = context.Connection.RemoteIpAddress;
-
-            var request = context.Request;
-            var method = request.Method;
-            var path = request.Path.Value;
-            var query = request.QueryString;
-            var contentType = request.ContentType;
-            var host = request.Host;
-            var date = DateTime.Now.ToString("s");
-
-            var response = context.Response;
-            var statusCode = response.StatusCode;
-            var level = (int)Level.Information;
-
-            var requestLogMessage = $"REQUEST:\n{request.Method} - {request.Path.Value}{request.QueryString}";
-            requestLogMessage += $"\nContentType: {request.ContentType ?? "Not specified"}";
-            requestLogMessage += $"\nHost: {request.Host}";
-            requestLogMessage += $"\nLevel: {level}";
-            File.AppendAllText("log.txt", $"{DateTime.Now.ToString("s")}\n{requestLogMessage}");
-
-            var responseLogMessage = $"\nRESPONSE:\nStatus Code: {response.StatusCode}";
-            File.AppendAllText("log.txt", $"{responseLogMessage}\n\n");
-        }
-
-        public void Api(Exception e)
-        {
-            
-        }
-
-        private void Logger()
+        private void Logger(string method, string level, string message, string exception, string url, string contentType, string statusCode, string ipAddress)
         {
             var thread = Thread.CurrentThread.ManagedThreadId.ToString();
+            var loggerId = LoggerId;
+            var userId = "userId";
+            var publisherId = "publisherId";
+            var enviroment = Enviroment;
+
+            using (var conn = new SqlConnection(ConnectionString))
+            {
+                try
+                {
+                    conn.Open();
+
+                    using (var cmd = new SqlCommand("dbo.InsLogs"))
+                    {
+                        cmd.CommandType = CommandType.StoredProcedure;
+
+                        cmd.Parameters.AddWithValue("@userId", userId);
+                        cmd.Parameters.AddWithValue("@publisherId", publisherId);
+                        cmd.Parameters.AddWithValue("@thread", thread);
+                        cmd.Parameters.AddWithValue("@loggerId", loggerId);
+                        cmd.Parameters.AddWithValue("@enviroment", enviroment);
+                        cmd.Parameters.AddWithValue("@method", method);
+                        cmd.Parameters.AddWithValue("@level", level);
+                        cmd.Parameters.AddWithValue("@message", message);
+                        cmd.Parameters.AddWithValue("@exception", exception);
+                        cmd.Parameters.AddWithValue("@url", url);
+                        cmd.Parameters.AddWithValue("@conentType", contentType);
+                        cmd.Parameters.AddWithValue("@statusCode", statusCode);
+                        cmd.Parameters.AddWithValue("@ipAddress", ipAddress);
+
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+                finally
+                {
+                    conn.Close();
+                }
+            }
         }
 
-        private enum Level
+        private static Enums.Level GetLevel(int statusCode)
         {
-            Trace = 0,
-            Debug = 1,
-            Information = 2,
-            Warning = 3,
-            Error = 4,
-            Critical = 5
+            if (statusCode < 400)
+                return Enums.Level.Information;
+
+            return statusCode < 500 ? Enums.Level.Error : Enums.Level.Critical;
+        }
+
+        private static string GetMethod()
+        {
+            // Todo: get correct method
+            var stackTrace = new StackTrace();
+            var methodBase = stackTrace.GetFrame(1).GetMethod();
+
+            return "Incorrect!: " + methodBase.ToString();
         }
     }
 }
